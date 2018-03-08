@@ -8,9 +8,10 @@ import (
 	"net/url"
 	"os"
 
+	"fmt"
 	"gopkg.in/errgo.v1"
-	log "gopkg.in/hockeypuck/logrus.v0"
 	"gopkg.in/hockeypuck/openpgp.v1"
+	"log"
 )
 
 var (
@@ -24,7 +25,7 @@ type KeyChan chan []*openpgp.PrimaryKey
 func readFile(file string, c KeyChan) {
 	f, err := os.Open(file)
 	if err != nil {
-		log.Errorf("Could not open %q: %s", file, err)
+		log.Printf("Could not open %q: %s", file, err)
 
 	} else {
 		defer f.Close()
@@ -33,7 +34,7 @@ func readFile(file string, c KeyChan) {
 
 		for kr := range openpgp.ReadKeys(f) {
 			if kr.Error != nil {
-				log.Errorf("Key could not be read: %v", errgo.Details(kr.Error))
+				log.Printf("Key could not be read: %v", errgo.Details(kr.Error))
 			} else {
 				keys = append(keys, kr.PrimaryKey)
 				if len(keys) >= 100 {
@@ -51,7 +52,7 @@ func readFile(file string, c KeyChan) {
 // load specified files
 func loadFiles(files []string, c KeyChan) {
 	for _, file := range files {
-		log.Errorf("Processing file: %s\n", file)
+		log.Printf("Processing file: %s\n", file)
 		readFile(file, c)
 	}
 	// all files handled, close channel
@@ -65,18 +66,20 @@ func shipit(w int, keys []*openpgp.PrimaryKey) {
 	keytext := b.String()
 
 	if err != nil {
-		log.Errorf("Worker: %d: Armor error %s \n", w, err)
+		log.Printf("Worker: %d: Armor error %s \n", w, err)
 	} else {
 		if len(keytext) > 0 {
 			resp, err := http.PostForm(*endpoint+"/pks/add", url.Values{
 				"keytext": []string{keytext},
 			})
 			if err != nil {
-				log.Errorf("Worker: %d, error: %s, resp: %v", w, err, resp)
+				log.Printf("Worker: %d, error: %s", w, err)
 			}
-			resp.Body.Close()
+			if resp != nil {
+				resp.Body.Close()
+			}
 		} else {
-			log.Debugf("Worker: %d: key resulted in empty bufffer %#v\n", w)
+			log.Printf("Worker: %d: key resulted in empty bufffer %#v\n", w)
 		}
 	}
 }
@@ -102,7 +105,7 @@ func main() {
 	args := flag.Args()
 
 	if len(args) == 0 {
-		log.Errorf("usage: %s [flags] <file1> [file2 .. fileN]", os.Args[0])
+		fmt.Printf("usage: %s [flags] <file1> [file2 .. fileN]", os.Args[0])
 		flag.PrintDefaults()
 	}
 
