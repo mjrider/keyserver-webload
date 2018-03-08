@@ -15,53 +15,53 @@ import (
 
 var (
 	endpoint = flag.String("endpoint", "http://127.0.0.1:11371", "server where the keyserver lives")
-	workers  = flag.Int("workers", 50, "Workers for shipping keys")
+	workers  = flag.Int("workers", 5, "Workers for shipping keys")
 )
 
-func main() {
-
-	flag.Parse()
-	args := flag.Args()
-
-	if len(args) == 0 {
-		log.Error("usage: %s [flags] <file1> [file2 .. fileN]", os.Args[0])
-	}
-
-	load(args)
-}
+type KeyChan chan []*openpgp.PrimaryKey
 
 // reads pgp file stream into chan
-func readFile(file string, c chan<- *openpgp.PrimaryKey) {
+func readFile(file string, c KeyChan) {
 	f, err := os.Open(file)
 	if err != nil {
 		log.Errorf("Could not open %q: %s", file, err)
 
 	} else {
 		defer f.Close()
+		var keys []*openpgp.PrimaryKey
+		keys = make([]*openpgp.PrimaryKey, 0, 100)
+
 		for kr := range openpgp.ReadKeys(f) {
 			if kr.Error != nil {
 				log.Errorf("Key could not be read: %v", errgo.Details(kr.Error))
 			} else {
-				c <- kr.PrimaryKey
+				keys = append(keys, kr.PrimaryKey)
+				if len(keys) >= 100 {
+					c <- keys
+					keys = make([]*openpgp.PrimaryKey, 0, 100)
+				}
 			}
+		}
+		if len(keys) >= 1 {
+			c <- keys
 		}
 	}
 }
 
 // load specified files
-func loadFiles(files []string, c chan<- *openpgp.PrimaryKey) {
+func loadFiles(files []string, c KeyChan) {
 	for _, file := range files {
+		log.Errorf("Processing file: %s\n", file)
 		readFile(file, c)
 	}
 	// all files handled, close channel
 	close(c)
 }
 
-func shipit(w int, key *openpgp.PrimaryKey) {
+func shipit(w int, keys []*openpgp.PrimaryKey) {
 	var b bytes.Buffer
 	writer := bufio.NewWriter(&b)
-
-	err := openpgp.WriteArmoredPackets(writer, []*openpgp.PrimaryKey{key})
+	err := openpgp.WriteArmoredPackets(writer, keys)
 	keytext := b.String()
 
 	if err != nil {
@@ -76,24 +76,35 @@ func shipit(w int, key *openpgp.PrimaryKey) {
 			}
 			resp.Body.Close()
 		} else {
-			log.Errorf("Worker: %d: key resulted in empty bufffer\n", w)
+			log.Debugf("Worker: %d: key resulted in empty bufffer %#v\n", w)
 		}
 	}
 }
 
-func shipper(w int, c <-chan *openpgp.PrimaryKey) {
-	for key := range c {
-		lkey := key
-		shipit(w, lkey)
+func shipper(w int, c KeyChan) {
+	for keys := range c {
+		shipit(w, keys)
 	}
 }
 
-func load(args []string) error {
+func load(args []string) {
 	// key channel
-	kc := make(chan *openpgp.PrimaryKey, 100)
+	kc := make(KeyChan, 100)
 	for w := 1; w <= *workers; w++ {
 		go shipper(w, kc)
 	}
 	loadFiles(args, kc)
-	return nil
+}
+
+func main() {
+
+	flag.Parse()
+	args := flag.Args()
+
+	if len(args) == 0 {
+		log.Errorf("usage: %s [flags] <file1> [file2 .. fileN]", os.Args[0])
+		flag.PrintDefaults()
+	}
+
+	load(args)
 }
